@@ -16,7 +16,8 @@ return 7; }`. The compiler reads every carried `.c` as text (`std_artifact.sysl`
 `run_cache.sysl`); C source is bytes, so it should be read and hashed as bytes. The workaround not
 taken: transcoding upstream's files.
 
-**Status: reported to `sysl`.**
+**Status: accepted for alpha.14** (sysl branch `c-bytes`: C is read and hashed as bytes, and the error
+names its reason).
 
 ## 2. Module storage whose initializer holds an address cannot go into a freestanding image (gap)
 
@@ -35,7 +36,9 @@ relocations. Possibly the same root as skiff's FINDINGS 6 (accepted for alpha.13
 bare-metal program keeps its bus and display as locals of its entry function, as the README says. The
 workaround not taken: an API of `begin(&bus)` plus a setup enum.
 
-**Status: reported to `sysl`.**
+**Status: accepted for alpha.14** (sysl branch `addr-fold`: addresses of module storage and of
+functions fold as relocations, including through a const constructor that only stores a function
+pointer).
 
 ## 3. `unit` has no `Eq` (gap)
 
@@ -43,7 +46,7 @@ workaround not taken: an API of `begin(&bus)` plus a setup enum.
 sh.sysl.u8g2.Error] needs 'sysl.Eq' … unit, which does not implement it`. The tests compare `.err()`.
 The same as `sysl-lang/fat`'s FINDINGS 5.
 
-**Status: queued for alpha.14.**
+**Status: fixed in alpha.13.**
 
 ## Also blocking bare metal
 
