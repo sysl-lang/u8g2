@@ -46,7 +46,7 @@ pointer).
 sh.sysl.u8g2.Error] needs 'sysl.Eq' … unit, which does not implement it`. The tests compare `.err()`.
 The same as `sysl-lang/fat`'s FINDINGS 5.
 
-**Status: fixed in alpha.13.**
+**Status: Fixed in 0.1.0-alpha.13.** The tests compare the `Result` directly.
 
 ## Also blocking bare metal
 
