@@ -1,0 +1,173 @@
+// u8g2 as C declares it.
+//
+// **Everything that is C lives in this directory**: the files of upstream's `csrc/` as they come, and
+// this file of declarations over them. Nothing here is meant to be called by a program. Every string is
+// a NUL-terminated `*u8`, every coordinate is a `u16` that wraps, and the display's state is storage
+// whose address u8g2 keeps. The module above turns those into strings, ints and methods, and is what an
+// application imports.
+//
+// Each declaration below was read out of `u8g2.h` and `u8x8.h`. A signature that disagrees with the
+// header links and then corrupts the call. The fields sysl reads out of `u8g2_t` itself are reached by
+// offsets the header is asked for, never by a layout written here, because `u8x8_t` is laid out
+// differently on different targets.
+
+module sh.sysl.u8g2.c
+
+@include("u8g2.h")
+@include("stddef.h")
+
+// The display's state, held by sysl as words of the size the header says. u8g2 keeps pointers into it,
+// to its own buffer and its own callbacks, so it never moves once set up.
+c const
+    U8G2_SIZE:  usize = "sizeof(u8g2_t)"
+    U8G2_ALIGN: usize = "_Alignof(u8g2_t)"
+
+@assert(U8G2_ALIGN <= 8, "'u8g2_t' wants a stronger alignment than an array of u64 gives")
+
+// Where in `u8g2_t` the fields its macros read are. `u8g2_t` begins with a `u8x8_t`, so the first
+// three are also where they are in that.
+c const
+    AT_DISPLAY_INFO:     usize = "offsetof(u8g2_t, u8x8.display_info)"
+    AT_I2C_ADDRESS:      usize = "offsetof(u8g2_t, u8x8.i2c_address)"
+    AT_USER_PTR:         usize = "offsetof(u8g2_t, u8x8.user_ptr)"
+    AT_TILE_BUF_PTR:     usize = "offsetof(u8g2_t, tile_buf_ptr)"
+    AT_TILE_BUF_HEIGHT:  usize = "offsetof(u8g2_t, tile_buf_height)"
+    AT_WIDTH:            usize = "offsetof(u8g2_t, width)"
+    AT_HEIGHT:           usize = "offsetof(u8g2_t, height)"
+    AT_DRAW_COLOR:       usize = "offsetof(u8g2_t, draw_color)"
+    AT_FONT_REF_ASCENT:  usize = "offsetof(u8g2_t, font_ref_ascent)"
+    AT_FONT_REF_DESCENT: usize = "offsetof(u8g2_t, font_ref_descent)"
+    AT_MAX_CHAR_HEIGHT:  usize = "offsetof(u8g2_t, font_info.max_char_height)"
+    AT_MAX_CHAR_WIDTH:   usize = "offsetof(u8g2_t, font_info.max_char_width)"
+    AT_TILE_WIDTH:       usize = "offsetof(u8x8_display_info_t, tile_width)"
+    AT_TILE_HEIGHT:      usize = "offsetof(u8x8_display_info_t, tile_height)"
+
+// The widths those fields have, so that a header which changed one is refused here rather than read
+// wrongly.
+c const
+    SIZE_COORD:     usize = "sizeof(u8g2_uint_t)"
+    SIZE_USER_PTR:  usize = "sizeof(((u8x8_t *)0)->user_ptr)"
+    SIZE_TILE_DIM:  usize = "sizeof(((u8x8_display_info_t *)0)->tile_width)"
+
+@assert(SIZE_COORD == 2, "u8g2 was compiled with 8-bit coordinates; the binding reads them as u16")
+@assert(SIZE_USER_PTR == sizeof(*u8), "'u8x8_t' has no user pointer of a pointer's width")
+@assert(SIZE_TILE_DIM == 1, "'tile_width' is not one byte")
+
+// The messages u8g2 sends the byte callback: the transport to the display.
+c const
+    MSG_BYTE_INIT:           u8 = "U8X8_MSG_BYTE_INIT"
+    MSG_BYTE_SET_DC:         u8 = "U8X8_MSG_BYTE_SET_DC"
+    MSG_BYTE_SEND:           u8 = "U8X8_MSG_BYTE_SEND"
+    MSG_BYTE_START_TRANSFER: u8 = "U8X8_MSG_BYTE_START_TRANSFER"
+    MSG_BYTE_END_TRANSFER:   u8 = "U8X8_MSG_BYTE_END_TRANSFER"
+
+// The messages it sends the gpio-and-delay callback.
+c const
+    MSG_GPIO_AND_DELAY_INIT: u8 = "U8X8_MSG_GPIO_AND_DELAY_INIT"
+    MSG_DELAY_MILLI:         u8 = "U8X8_MSG_DELAY_MILLI"
+    MSG_DELAY_10MICRO:       u8 = "U8X8_MSG_DELAY_10MICRO"
+    MSG_DELAY_100NANO:       u8 = "U8X8_MSG_DELAY_100NANO"
+    MSG_DELAY_NANO:          u8 = "U8X8_MSG_DELAY_NANO"
+    MSG_DELAY_I2C:           u8 = "U8X8_MSG_DELAY_I2C"
+    MSG_GPIO_CS:             u8 = "U8X8_MSG_GPIO_CS"
+    MSG_GPIO_DC:             u8 = "U8X8_MSG_GPIO_DC"
+    MSG_GPIO_RESET:          u8 = "U8X8_MSG_GPIO_RESET"
+
+// Which quarters `DrawCircle` and `DrawDisc` draw.
+c const
+    DRAW_UPPER_RIGHT: u8 = "U8G2_DRAW_UPPER_RIGHT"
+    DRAW_UPPER_LEFT:  u8 = "U8G2_DRAW_UPPER_LEFT"
+    DRAW_LOWER_LEFT:  u8 = "U8G2_DRAW_LOWER_LEFT"
+    DRAW_LOWER_RIGHT: u8 = "U8G2_DRAW_LOWER_RIGHT"
+    DRAW_ALL:         u8 = "U8G2_DRAW_ALL"
+
+// Opaque stand-ins, so a pointer to one says which it is. `U8g2` is a whole `u8g2_t` and `U8x8` the
+// `u8x8_t` it begins with; they share an address, which is what `u8g2_GetU8x8` says too.
+struct U8g2
+    private word: u64
+
+struct U8x8
+    private word: u64
+
+// A font: the first byte of one of the `const uint8_t` arrays in `u8g2_fonts.c`. Only its address is
+// ever used.
+struct Font
+    private first: u8
+
+// `u8g2_cb_t`: one of the six rotations, as a table of three functions u8g2 owns.
+struct Rotation
+    private word: u64
+
+// What both callbacks are: `u8x8_msg_cb`.
+type Msg = *extern(*U8x8, u8, u8, *u8) -> u8
+
+// What every display's setup function is.
+type Setup = *extern(*U8g2, *Rotation, Msg, Msg) -> unit
+
+// The rotations. They are `const` tables in C; nothing here writes them.
+extern "u8g2_cb_r0" cb_r0: Rotation
+extern "u8g2_cb_r1" cb_r1: Rotation
+extern "u8g2_cb_r2" cb_r2: Rotation
+extern "u8g2_cb_r3" cb_r3: Rotation
+extern "u8g2_cb_mirror" cb_mirror: Rotation
+extern "u8g2_cb_mirror_vertical" cb_mirror_vertical: Rotation
+
+// The setups this package names for the displays the kit uses: a full frame buffer in RAM (`_f`), or
+// one page of it (`_1`). Every other display is reached the same way through `Setup`.
+extern "u8g2_Setup_null" setup_null(u8g2: *U8g2, rotation: *Rotation, byte_cb: Msg, gpio_cb: Msg)
+extern "u8g2_Setup_ssd1306_i2c_128x64_noname_f" setup_ssd1306_i2c_128x64_noname_f(u8g2: *U8g2, rotation: *Rotation, byte_cb: Msg, gpio_cb: Msg)
+extern "u8g2_Setup_ssd1306_i2c_128x64_noname_1" setup_ssd1306_i2c_128x64_noname_1(u8g2: *U8g2, rotation: *Rotation, byte_cb: Msg, gpio_cb: Msg)
+extern "u8g2_Setup_ssd1306_128x64_noname_f" setup_ssd1306_128x64_noname_f(u8g2: *U8g2, rotation: *Rotation, byte_cb: Msg, gpio_cb: Msg)
+extern "u8g2_Setup_ssd1306_i2c_128x32_univision_f" setup_ssd1306_i2c_128x32_univision_f(u8g2: *U8g2, rotation: *Rotation, byte_cb: Msg, gpio_cb: Msg)
+extern "u8g2_Setup_sh1106_i2c_128x64_noname_f" setup_sh1106_i2c_128x64_noname_f(u8g2: *U8g2, rotation: *Rotation, byte_cb: Msg, gpio_cb: Msg)
+extern "u8g2_Setup_sh1106_128x64_noname_f" setup_sh1106_128x64_noname_f(u8g2: *U8g2, rotation: *Rotation, byte_cb: Msg, gpio_cb: Msg)
+
+// The display itself, through `u8x8`.
+extern "u8x8_InitDisplay" init_display(u8x8: *U8x8)
+extern "u8x8_SetPowerSave" set_power_save(u8x8: *U8x8, is_enable: u8)
+extern "u8x8_SetContrast" set_contrast(u8x8: *U8x8, value: u8)
+extern "u8g2_ClearDisplay" clear_display(u8g2: *U8g2)
+extern "u8g2_SetDisplayRotation" set_display_rotation(u8g2: *U8g2, rotation: *Rotation)
+
+// The frame buffer.
+extern "u8g2_ClearBuffer" clear_buffer(u8g2: *U8g2)
+extern "u8g2_SendBuffer" send_buffer(u8g2: *U8g2)
+extern "u8g2_UpdateDisplayArea" update_display_area(u8g2: *U8g2, tx: u8, ty: u8, tw: u8, th: u8)
+extern "u8g2_FirstPage" first_page(u8g2: *U8g2)
+extern "u8g2_NextPage" next_page(u8g2: *U8g2) -> u8
+
+// Drawing.
+extern "u8g2_SetDrawColor" set_draw_color(u8g2: *U8g2, color: u8)
+extern "u8g2_SetMaxClipWindow" set_max_clip_window(u8g2: *U8g2)
+extern "u8g2_SetClipWindow" set_clip_window(u8g2: *U8g2, x0: u16, y0: u16, x1: u16, y1: u16)
+extern "u8g2_DrawPixel" draw_pixel(u8g2: *U8g2, x: u16, y: u16)
+extern "u8g2_DrawHLine" draw_hline(u8g2: *U8g2, x: u16, y: u16, len: u16)
+extern "u8g2_DrawVLine" draw_vline(u8g2: *U8g2, x: u16, y: u16, len: u16)
+extern "u8g2_DrawLine" draw_line(u8g2: *U8g2, x1: u16, y1: u16, x2: u16, y2: u16)
+extern "u8g2_DrawBox" draw_box(u8g2: *U8g2, x: u16, y: u16, w: u16, h: u16)
+extern "u8g2_DrawFrame" draw_frame(u8g2: *U8g2, x: u16, y: u16, w: u16, h: u16)
+extern "u8g2_DrawRBox" draw_rbox(u8g2: *U8g2, x: u16, y: u16, w: u16, h: u16, r: u16)
+extern "u8g2_DrawRFrame" draw_rframe(u8g2: *U8g2, x: u16, y: u16, w: u16, h: u16, r: u16)
+extern "u8g2_DrawCircle" draw_circle(u8g2: *U8g2, x0: u16, y0: u16, rad: u16, option: u8)
+extern "u8g2_DrawDisc" draw_disc(u8g2: *U8g2, x0: u16, y0: u16, rad: u16, option: u8)
+extern "u8g2_DrawEllipse" draw_ellipse(u8g2: *U8g2, x0: u16, y0: u16, rx: u16, ry: u16, option: u8)
+extern "u8g2_DrawFilledEllipse" draw_filled_ellipse(u8g2: *U8g2, x0: u16, y0: u16, rx: u16, ry: u16, option: u8)
+extern "u8g2_DrawArc" draw_arc(u8g2: *U8g2, x0: u16, y0: u16, rad: u16, start: u8, end: u8)
+extern "u8g2_DrawTriangle" draw_triangle(u8g2: *U8g2, x0: i16, y0: i16, x1: i16, y1: i16, x2: i16, y2: i16)
+extern "u8g2_SetBitmapMode" set_bitmap_mode(u8g2: *U8g2, is_transparent: u8)
+extern "u8g2_DrawXBM" draw_xbm(u8g2: *U8g2, x: u16, y: u16, w: u16, h: u16, bitmap: *u8)
+
+// Text.
+extern "u8g2_SetFont" set_font(u8g2: *U8g2, font: *Font)
+extern "u8g2_SetFontMode" set_font_mode(u8g2: *U8g2, is_transparent: u8)
+extern "u8g2_SetFontDirection" set_font_direction(u8g2: *U8g2, dir: u8)
+extern "u8g2_SetFontPosBaseline" set_font_pos_baseline(u8g2: *U8g2)
+extern "u8g2_SetFontPosBottom" set_font_pos_bottom(u8g2: *U8g2)
+extern "u8g2_SetFontPosTop" set_font_pos_top(u8g2: *U8g2)
+extern "u8g2_SetFontPosCenter" set_font_pos_center(u8g2: *U8g2)
+extern "u8g2_IsGlyph" is_glyph(u8g2: *U8g2, encoding: u16) -> u8
+extern "u8g2_DrawGlyph" draw_glyph(u8g2: *U8g2, x: u16, y: u16, encoding: u16) -> u16
+extern "u8g2_DrawStr" draw_str(u8g2: *U8g2, x: u16, y: u16, s: *u8) -> u16
+extern "u8g2_DrawUTF8" draw_utf8(u8g2: *U8g2, x: u16, y: u16, s: *u8) -> u16
+extern "u8g2_GetStrWidth" get_str_width(u8g2: *U8g2, s: *u8) -> u16
+extern "u8g2_GetUTF8Width" get_utf8_width(u8g2: *U8g2, s: *u8) -> u16

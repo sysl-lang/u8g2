@@ -1,0 +1,31 @@
+module sh.sysl.u8g2.fonts
+
+import sh.sysl.u8g2.c.Font
+
+// A few of u8g2's fonts, named so that a first program needs no `extern` of its own. Each is a `const`
+// array in `u8g2_fonts.c`, and naming it here costs nothing: the linker keeps a font only when a
+// program takes its address. u8g2 has hundreds more (github.com/olikraus/u8g2/wiki/fntlistall), and any
+// of them is reached the same way, with one line in the program:
+//
+//     extern "u8g2_font_courB18_tf" courier: Font
+//
+// The suffix of a font's name says which characters it carries: `_tf` all of Latin-1, `_tr` printable
+// ASCII, `_tn` digits and a little punctuation, `_t_symbols` a selection of Unicode symbols.
+
+// 5 by 7 pixels: the smallest that is still easy to read. 25 characters across a 128-pixel display.
+extern "u8g2_font_5x7_tf" font_5x7: Font
+
+// 6 by 10 pixels: the usual first choice. 21 characters across, six lines down a 64-pixel display.
+extern "u8g2_font_6x10_tf" font_6x10: Font
+
+// 7 by 13 pixels, bold.
+extern "u8g2_font_7x13B_tf" font_7x13_bold: Font
+
+// Helvetica bold, 10 points: proportional, for a heading.
+extern "u8g2_font_helvB10_tf" font_helvetica_bold_10: Font
+
+// Large digits, 24 pixels high, for a clock or a reading: numbers, `.`, `:`, `-` and `/`.
+extern "u8g2_font_logisoso24_tn" font_digits_24: Font
+
+// Unifont's symbols: arrows, card suits, weather, chess and more, drawn with `text` from UTF-8.
+extern "u8g2_font_unifont_t_symbols" font_symbols: Font

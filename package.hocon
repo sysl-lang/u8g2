@@ -1,0 +1,29 @@
+// u8g2 for sysl: drawing, text in hundreds of fonts, and drivers for small monochrome OLEDs and LCDs
+// (SSD1306, SH1106 and about a hundred more), bound to the u8g2 C library (olikraus/u8g2), vendored
+// unchanged.
+//
+// This is the block a consumer writes to reach it:
+//
+//     dependencies {
+//       u8g2 { git = "github.com/sysl-lang/u8g2", version = "<the first tag>" }
+//     }
+//
+// The module is `sh.sysl.u8g2`.
+
+package {
+  name    = "u8g2"
+  version = "0.0.1"
+}
+
+// **What u8g2 is compiled with is this package's decision, not a consumer's.** One option:
+//
+// - `U8X8_WITH_USER_PTR`: `u8x8_t` carries a `void *` for the application, which is how the two
+//   callbacks u8g2 makes (the bytes for the display, and the pins and delays) find the sysl value they
+//   belong to. Upstream turns it on for Linux only. It changes the layout of `u8x8_t`, which is the
+//   first member of `u8g2_t`, so it is given to every file or to none: a file compiled without it would
+//   read every field of `u8g2_t` one pointer early.
+defines {
+  "sh/sysl/u8g2/c/{mui_u8g2,mui,u8g2_arc,u8g2_bitmap,u8g2_box,u8g2_buffer,u8g2_button,u8g2_circle,u8g2_cleardisplay,u8g2_d_memory,u8g2_d_setup,u8g2_font,u8g2_fonts,u8g2_hvline,u8g2_input_value,u8g2_intersection,u8g2_kerning,u8g2_line,u8g2_ll_hvline,u8g2_message,u8g2_polygon,u8g2_selection_list,u8g2_setup,u8log_u8g2,u8log_u8x8,u8log,u8x8_8x8,u8x8_byte,u8x8_cad,u8x8_capture,u8x8_d_a2printer,u8x8_d_ch1120,u8x8_d_gp1247ai,u8x8_d_gp1287ai,u8x8_d_gp1294ai,u8x8_d_gu800,u8x8_d_hd44102,u8x8_d_il3820_296x128,u8x8_d_ist3020,u8x8_d_ist3088,u8x8_d_ist7920,u8x8_d_ks0108,u8x8_d_lc7981,u8x8_d_ld7032_60x32,u8x8_d_ls013b7dh03,u8x8_d_max7219,u8x8_d_pcd8544_84x48,u8x8_d_pcf8812,u8x8_d_pcf8814_hx1230,u8x8_d_s1d15300,u8x8_d_s1d15721,u8x8_d_s1d15e06,u8x8_d_sbn1661,u8x8_d_sed1330,u8x8_d_sh1106_64x32,u8x8_d_sh1106_72x40,u8x8_d_sh1107,u8x8_d_sh1108,u8x8_d_sh1122,u8x8_d_ssd1305,u8x8_d_ssd1306_128x32,u8x8_d_ssd1306_128x64_noname,u8x8_d_ssd1306_2040x16,u8x8_d_ssd1306_48x64,u8x8_d_ssd1306_64x32,u8x8_d_ssd1306_64x48,u8x8_d_ssd1306_72x40,u8x8_d_ssd1306_96x16,u8x8_d_ssd1306_96x40,u8x8_d_ssd1309,u8x8_d_ssd1312,u8x8_d_ssd1315_128x64_noname,u8x8_d_ssd1316,u8x8_d_ssd1317,u8x8_d_ssd1318,u8x8_d_ssd1320,u8x8_d_ssd1322,u8x8_d_ssd1325,u8x8_d_ssd1326,u8x8_d_ssd1327,u8x8_d_ssd1329,u8x8_d_ssd1362,u8x8_d_ssd1362z,u8x8_d_ssd1363,u8x8_d_ssd1606_172x72,u8x8_d_ssd1607_200x200,u8x8_d_st7302,u8x8_d_st7305,u8x8_d_st7511,u8x8_d_st75160,u8x8_d_st75161,u8x8_d_st75256,u8x8_d_st7528,u8x8_d_st75320,u8x8_d_st7539,u8x8_d_st7565,u8x8_d_st7567,u8x8_d_st7571,u8x8_d_st7586s_erc240160,u8x8_d_st7586s_jlx320160,u8x8_d_st7586s_jlx384160,u8x8_d_st7586s_md240128,u8x8_d_st7586s_pe24064,u8x8_d_st7586s_s028hn118a,u8x8_d_st7586s_ymc240160,u8x8_d_st7588,u8x8_d_st7920,u8x8_d_stdio,u8x8_d_t6963,u8x8_d_uc1601,u8x8_d_uc1604,u8x8_d_uc1608,u8x8_d_uc1609,u8x8_d_uc1610,u8x8_d_uc1611,u8x8_d_uc1617,u8x8_d_uc1628,u8x8_d_uc1638,u8x8_d_uc1698,u8x8_d_uc1701_dogs102,u8x8_d_uc1701_mini12864,u8x8_debounce,u8x8_display,u8x8_fonts,u8x8_gpio,u8x8_input_value,u8x8_message,u8x8_selection_list,u8x8_setup,u8x8_string,u8x8_u16toa,u8x8_u8toa}.c" {
+    U8X8_WITH_USER_PTR = true
+  }
+}

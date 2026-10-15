@@ -1,0 +1,452 @@
+module sh.sysl.u8g2
+@tests
+@requires(heap, os)
+
+import sh.sysl.u8g2.fonts.{font_5x7, font_6x10}
+import sysl.buf.{Buf, buf}
+
+// A bus that keeps everything u8g2 hands it.
+private struct Recorder
+    bytes: Buf[u8]
+    starts: int
+    stops: int
+    addresses: Buf[u8]
+    waited_ms: u32
+    resets: Buf[bool]
+    inits: int
+
+impl Bus for Recorder
+    override init(*self)
+        self.inits += 1
+
+    start(*self, address: u8)
+        self.starts += 1
+        self.addresses.push(address)
+
+    write(*self, bytes: []const u8)
+        for b in bytes
+            self.bytes.push(b)
+
+    stop(*self)
+        self.stops += 1
+
+    override reset(*self, high: bool)
+        self.resets.push(high)
+
+    delay_ms(*self, ms: u32)
+        self.waited_ms += ms
+
+private recorder() -> Recorder = Recorder(buf(), 0, 0, buf(), 0, buf(), 0)
+
+// Whether the pixel at (`x`, `y`) of an unrotated 128-pixel-wide full buffer is set: tile rows of 8
+// pixels, one byte per column, the top pixel in bit 0.
+private lit(b: []u8, x: int, y: int) -> bool = b[usize(y / 8 * 128 + x)] & (u8(1) << u8(y % 8)) != 0
+
+// How many pixels of a buffer are set.
+private count_lit(b: []u8) -> int
+    var n = 0
+    for byte in b
+        var v = byte
+        while v != 0
+            n += int(v & 1)
+            v >>= 1
+    n
+
+@test("a full-buffer SSD1306 is 128 by 64 with a 1,024-byte buffer of 16 by 8 tiles")
+geometry()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    assert(!oled.is_begun())
+    oled.configure()
+    assert(oled.is_begun())
+    assert_eq(oled.width(), 128)
+    assert_eq(oled.height(), 64)
+    assert_eq(oled.tile_width(), 16)
+    assert_eq(oled.tile_height(), 8)
+    assert_eq(oled.buffer_tile_height(), 8)
+    assert_eq(oled.buffer().len, 1024)
+
+@test("the 128 by 32 strip has a 512-byte buffer")
+strip_geometry()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x32(&bus)
+    oled.configure()
+    assert_eq(oled.width(), 128)
+    assert_eq(oled.height(), 32)
+    assert_eq(oled.buffer().len, 512)
+
+@test("a pixel lands in the bit u8g2's layout puts it in, and clear empties the buffer")
+pixels()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.pixel(0, 0)
+    oled.pixel(127, 63)
+    oled.pixel(5, 9)
+    val b = oled.buffer()
+    assert_eq(b[0], 0x01)
+    assert_eq(b[1023], 0x80)
+    assert_eq(b[128 + 5], 0x02)
+    assert_eq(count_lit(b), 3)
+    oled.clear()
+    assert_eq(count_lit(oled.buffer()), 0)
+
+@test("a box sets exactly its own pixels, and a frame only its edge")
+box_and_frame()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.box(10, 5, 4, 3)
+    var b = oled.buffer()
+    assert_eq(count_lit(b), 12)
+    assert(lit(b, 10, 5))
+    assert(lit(b, 13, 7))
+    assert(!lit(b, 14, 7))
+    assert(!lit(b, 13, 8))
+    assert(!lit(b, 9, 5))
+    oled.clear()
+    oled.frame(0, 0, 10, 10)
+    b = oled.buffer()
+    assert_eq(count_lit(b), 36)
+    assert(lit(b, 9, 9))
+    assert(!lit(b, 5, 5))
+
+@test("lines, circles and discs set the pixels their geometry says")
+lines_and_circles()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.hline(0, 3, 128)
+    assert_eq(count_lit(oled.buffer()), 128)
+    oled.clear()
+    oled.vline(7, 0, 64)
+    assert_eq(count_lit(oled.buffer()), 64)
+    oled.clear()
+    oled.line(0, 0, 63, 63)
+    var b = oled.buffer()
+    assert_eq(count_lit(b), 64)
+    assert(lit(b, 31, 31))
+    oled.clear()
+    oled.disc(64, 32, 10)
+    b = oled.buffer()
+    assert(lit(b, 64, 32))
+    assert(lit(b, 54, 32))
+    assert(!lit(b, 53, 32))
+    oled.clear()
+    oled.circle(64, 32, 10)
+    b = oled.buffer()
+    assert(!lit(b, 64, 32))
+    assert(lit(b, 74, 32))
+    oled.clear()
+    oled.disc(64, 32, 10, UPPER_LEFT)
+    b = oled.buffer()
+    assert(lit(b, 60, 28))
+    assert(!lit(b, 68, 36))
+
+@test("drawing past every edge is clipped, including at negative coordinates")
+clipped_at_the_edges()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.box(-5, -5, 10, 10)
+    var b = oled.buffer()
+    assert_eq(count_lit(b), 25)
+    assert(lit(b, 0, 0))
+    assert(lit(b, 4, 4))
+    oled.clear()
+    oled.box(120, 60, 50, 50)
+    b = oled.buffer()
+    assert_eq(count_lit(b), 32)
+    oled.clear()
+    oled.box(200, 100, 10, 10)
+    oled.disc(-50, -50, 10)
+    assert_eq(count_lit(oled.buffer()), 0)
+
+@test("a clip window keeps drawing inside it until unclip")
+clip_window()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.clip(10, 10, 20, 15)
+    oled.box(0, 0, 128, 64)
+    var b = oled.buffer()
+    assert_eq(count_lit(b), 50)
+    assert(lit(b, 10, 10))
+    assert(lit(b, 19, 14))
+    assert(!lit(b, 20, 14))
+    oled.unclip()
+    oled.box(0, 0, 128, 64)
+    assert_eq(count_lit(oled.buffer()), 128 * 64)
+
+@test("Off clears pixels and Invert flips them")
+colors()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    assert(oled.color() == Color.On)
+    oled.box(0, 0, 10, 10)
+    oled.set_color(Color.Off)
+    assert(oled.color() == Color.Off)
+    oled.box(0, 0, 5, 10)
+    assert_eq(count_lit(oled.buffer()), 50)
+    oled.set_color(Color.Invert)
+    assert(oled.color() == Color.Invert)
+    oled.box(0, 0, 10, 10)
+    var b = oled.buffer()
+    assert_eq(count_lit(b), 50)
+    assert(lit(b, 0, 0))
+    assert(!lit(b, 9, 9))
+
+// u8g2 measures a string to the last column its last letter inks, not to where the next letter would
+// start, so "Hello" is 29 pixels wide in a 6-pixel font while drawing it advances 30.
+@test("text is measured and drawn in the font set, and two fonts differ")
+text_in_two_fonts()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.set_font(&font_6x10)
+    assert_eq(oled.text_width("Hello"), 29)
+    assert_eq(oled.max_char_width(), 6)
+    assert_eq(oled.max_char_height(), 10)
+    assert(oled.ascent() > 0)
+    assert(oled.descent() < 0)
+    assert_eq(oled.text(0, 10, "Hello"), 30)
+    val big = count_lit(oled.buffer())
+    assert(big > 0)
+    oled.clear()
+    oled.set_font(&font_5x7)
+    assert_eq(oled.text_width("Hello"), 24)
+    assert_eq(oled.max_char_width(), 5)
+    assert_eq(oled.text(0, 10, "Hello"), 25)
+    assert(count_lit(oled.buffer()) != big)
+
+@test("text is UTF-8: a two-byte character draws the glyph it encodes")
+utf8_text()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.set_font(&font_6x10)
+    assert_eq(oled.text(0, 20, "ü"), 6)
+    var through_text: [1024]u8 = [0; 1024]
+    val b = oled.buffer()
+    for i in 0..<b.len
+        through_text[i] = b[i]
+    oled.clear()
+    assert_eq(oled.glyph(0, 20, 'ü'), 6)
+    val g = oled.buffer()
+    for i in 0..<g.len
+        assert_eq(g[i], through_text[i])
+    assert(count_lit(g) > 0)
+    assert_eq(oled.text_width("Grüße"), 29)
+
+@test("has_glyph knows what the font carries, and a glyph past U+FFFF draws nothing")
+glyph_coverage()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.set_font(&font_6x10)
+    assert(oled.has_glyph('A'))
+    assert(oled.has_glyph('ß'))
+    assert(!oled.has_glyph('€'))
+    assert(!oled.has_glyph('😀'))
+    assert_eq(oled.glyph(0, 10, '😀'), 0)
+    assert_eq(count_lit(oled.buffer()), 0)
+
+@test("text running off the right edge is clipped, and text above the top is not drawn")
+text_clipped()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.set_font(&font_6x10)
+    assert_eq(oled.text(120, 30, "edge"), 24)
+    var b = oled.buffer()
+    var left_of_120 = 0
+    for y in 0..<64
+        for x in 0..<120
+            if lit(b, x, y) then left_of_120 += 1
+    assert_eq(left_of_120, 0)
+    assert(count_lit(b) > 0)
+    oled.clear()
+    oled.text(0, -20, "gone")
+    assert_eq(count_lit(oled.buffer()), 0)
+
+@test("text longer than MAX_TEXT is cut at the last whole character, and a NUL ends it")
+long_text()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.set_font(&font_6x10)
+    var s = ""
+    for i in 0..<150
+        s = s + "ü"
+    assert_eq(s.bytes.len, 300)
+    assert_eq(oled.text_width(s), 127 * 6 - 1)
+    assert_eq(oled.text_width("ab\0cd"), oled.text_width("ab"))
+    assert(oled.text_width("ab") < oled.text_width("abcd"))
+
+@test("the anchor moves text: Top puts the top of the letters at y")
+anchors()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.set_font(&font_6x10)
+    oled.set_anchor(Anchor.Top)
+    oled.text(0, 0, "H")
+    var b = oled.buffer()
+    var top_rows = 0
+    for x in 0..<6
+        if lit(b, x, 0) || lit(b, x, 1) then top_rows += 1
+    assert(top_rows > 0)
+    oled.clear()
+    oled.set_anchor(Anchor.Baseline)
+    oled.text(0, 0, "H")
+    assert_eq(count_lit(oled.buffer()), 0)
+
+@test("text drawn downwards runs down the display")
+direction()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.set_font(&font_6x10)
+    oled.set_direction(Direction.Down)
+    oled.text(20, 0, "HHHH")
+    var b = oled.buffer()
+    var below_16 = 0
+    for y in 16..<24
+        for x in 0..<30
+            if lit(b, x, y) then below_16 += 1
+    assert(below_16 > 0)
+    var right_of_32 = 0
+    for y in 0..<64
+        for x in 32..<128
+            if lit(b, x, y) then right_of_32 += 1
+    assert_eq(right_of_32, 0)
+
+@test("rotation turns the display: R90 is 64 wide, and R180 puts (0, 0) in the far corner")
+rotation()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus, Rotation.R90)
+    oled.configure()
+    assert_eq(oled.width(), 64)
+    assert_eq(oled.height(), 128)
+    oled.set_rotation(Rotation.R180)
+    assert_eq(oled.width(), 128)
+    oled.pixel(0, 0)
+    var b = oled.buffer()
+    assert(lit(b, 127, 63))
+    assert_eq(count_lit(b), 1)
+    oled.clear()
+    oled.set_rotation(Rotation.Mirror)
+    oled.pixel(0, 0)
+    assert(lit(oled.buffer(), 127, 0))
+    oled.clear()
+    oled.set_rotation(Rotation.MirrorVertical)
+    oled.pixel(0, 0)
+    assert(lit(oled.buffer(), 0, 63))
+    oled.clear()
+    oled.set_rotation(Rotation.R270)
+    assert_eq(oled.width(), 64)
+    oled.pixel(0, 0)
+    assert(lit(oled.buffer(), 0, 63))
+    oled.clear()
+    oled.set_rotation(Rotation.R90)
+    oled.pixel(0, 0)
+    assert(lit(oled.buffer(), 127, 0))
+
+@test("a bitmap is drawn row by row, leftmost pixel in bit 0, and one too short is refused")
+bitmaps()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    val arrow: [3]u8 = [0x01, 0x03, 0x07]
+    oled.bitmap(0, 0, 3, 3, arrow[..]).unwrap()
+    var b = oled.buffer()
+    assert_eq(count_lit(b), 6)
+    assert(lit(b, 0, 0))
+    assert(!lit(b, 1, 0))
+    assert(lit(b, 2, 2))
+    assert(oled.bitmap(0, 0, 9, 3, arrow[..]).err() == Some(Error.BitmapTooShort))
+    assert(oled.bitmap(0, 0, 3, 4, arrow[..]).err() == Some(Error.BitmapTooShort))
+    assert(oled.bitmap(0, 0, -1, 3, arrow[..]).err() == Some(Error.BitmapTooShort))
+
+@test("begin starts the bus, resets the display, waits, and sends its start-up commands")
+begin_talks_to_the_display()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.begin()
+    assert_eq(bus.inits, 1)
+    assert(bus.starts > 0)
+    assert_eq(bus.starts, bus.stops)
+    for a in bus.addresses
+        assert_eq(a, 0x3c)
+    assert(bus.waited_ms > 0)
+    assert(bus.resets.len() > 1)
+    assert(!bus.resets[bus.resets.len() - 2])
+    assert(bus.resets[bus.resets.len() - 1])
+    assert(bus.bytes.len() > 0)
+    assert_eq(bus.bytes[0], 0x00)
+    assert_eq(oled.i2c_address(), 0x3c)
+
+@test("send transfers the whole frame buffer, and a changed address is used")
+send_the_buffer()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.configure()
+    oled.set_i2c_address(0x3d)
+    assert_eq(oled.i2c_address(), 0x3d)
+    oled.box(0, 0, 128, 64)
+    oled.send()
+    var ones = 0
+    for b in bus.bytes
+        if b == 0xff then ones += 1
+    assert(ones >= 1024)
+    assert(bus.starts > 0)
+    for a in bus.addresses
+        assert_eq(a, 0x3d)
+
+@test("each display reaches its own bus through u8g2's user pointer")
+two_buses()
+    var first = recorder()
+    var second = recorder()
+    var a = ssd1306_i2c_128x64(&first)
+    var b = ssd1306_i2c_128x32(&second)
+    a.begin()
+    b.begin()
+    val before = first.bytes.len()
+    b.box(0, 0, 128, 32)
+    b.send()
+    assert_eq(first.bytes.len(), before)
+    var ones = 0
+    for x in second.bytes
+        if x == 0xff then ones += 1
+    assert(ones >= 512)
+
+@test("a paged display draws the picture once per page, eight times for 64 rows")
+paged()
+    var bus = recorder()
+    var oled = ssd1306_i2c_128x64_paged(&bus)
+    oled.configure()
+    assert_eq(oled.buffer_tile_height(), 1)
+    assert_eq(oled.buffer().len, 128)
+    var pages = 0
+    oled.first_page()
+    loop
+        pages += 1
+        oled.box(0, 0, 128, 64)
+        if !oled.next_page() then break
+    assert_eq(pages, 8)
+    var ones = 0
+    for x in bus.bytes
+        if x == 0xff then ones += 1
+    assert(ones >= 1024)
+
+@test("the null display takes every call and sends nothing")
+null_display_is_quiet()
+    var bus = recorder()
+    var oled = null_display(&bus)
+    oled.begin()
+    oled.set_font(&font_6x10)
+    oled.text(0, 10, "nothing")
+    oled.box(0, 0, 100, 100)
+    oled.send()
+    assert_eq(bus.bytes.len(), 0)

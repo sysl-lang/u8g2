@@ -1,0 +1,188 @@
+module sh.sysl.u8g2
+@tests
+@requires(heap, os)
+
+import sh.sysl.u8g2.fonts.{font_5x7, font_6x10}
+import sysl.buf.{Buf, buf}
+import sysl.fmt.hex
+import sysl.fs.{entries, make_temp_dir, read_bytes, remove_dir_all, write_text}
+import sysl.process.capture
+import sysl.text.{Search, str_builder}
+
+// The binding against u8g2 driven from C. A program written straight against `u8g2.h`, compiled from
+// the same vendored source with the same option, sets up the same SSD1306 on I2C, starts it, draws the
+// same scene and sends it. u8g2 is deterministic, so the two frame buffers must be the same bytes, and
+// everything the two byte callbacks and the two gpio callbacks were asked to do must be the same,
+// in order: every transfer with its address and bytes, every reset and every delay. A coordinate the
+// binding converted wrongly, a font or rotation it handed over wrongly, or a callback message it routed
+// wrongly changes one or the other.
+
+private val DRIVER: string = raw"""
+    #include <stdio.h>
+    #include "u8g2.h"
+
+    static FILE *log_out;
+
+    static uint8_t on_byte(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr) {
+        switch (msg) {
+        case U8X8_MSG_BYTE_INIT: fprintf(log_out, "I "); break;
+        case U8X8_MSG_BYTE_START_TRANSFER: fprintf(log_out, "S%02x ", u8x8_GetI2CAddress(u8x8) >> 1); break;
+        case U8X8_MSG_BYTE_SEND:
+            for (int i = 0; i < arg_int; i++) fprintf(log_out, "%02x", ((uint8_t *)arg_ptr)[i]);
+            fprintf(log_out, " ");
+            break;
+        case U8X8_MSG_BYTE_END_TRANSFER: fprintf(log_out, "E "); break;
+        case U8X8_MSG_BYTE_SET_DC: fprintf(log_out, "C%d ", arg_int); break;
+        default: return 0;
+        }
+        return 1;
+    }
+
+    static uint8_t on_gpio(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr) {
+        switch (msg) {
+        case U8X8_MSG_DELAY_MILLI: fprintf(log_out, "D%d ", arg_int); break;
+        case U8X8_MSG_GPIO_RESET: fprintf(log_out, "R%d ", arg_int); break;
+        default: break;
+        }
+        return 1;
+    }
+
+    static const uint8_t smiley[8] = { 0x3c, 0x42, 0xa5, 0x81, 0xa5, 0x99, 0x42, 0x3c };
+
+    int main(int argc, char **argv) {
+        u8g2_t u8g2;
+        log_out = stdout;
+        u8g2_Setup_ssd1306_i2c_128x64_noname_f(&u8g2, U8G2_R0, on_byte, on_gpio);
+        u8g2_InitDisplay(&u8g2);
+        u8g2_SetPowerSave(&u8g2, 0);
+        u8g2_ClearBuffer(&u8g2);
+        fprintf(log_out, "| ");
+
+        u8g2_SetFont(&u8g2, u8g2_font_6x10_tf);
+        u8g2_DrawUTF8(&u8g2, 0, 10, "Hello, u8g2!");
+        u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
+        u8g2_DrawUTF8(&u8g2, 2, 20, "Gr\xc3\xbc\xc3\x9f" "e 25\xc2\xb0" "C");
+        u8g2_DrawFrame(&u8g2, 0, 0, 128, 64);
+        u8g2_DrawBox(&u8g2, 100, 30, 20, 12);
+        u8g2_DrawLine(&u8g2, 0, 63, 127, 24);
+        u8g2_DrawCircle(&u8g2, 30, 40, 10, U8G2_DRAW_ALL);
+        u8g2_DrawDisc(&u8g2, (u8g2_uint_t)-3, 50, 8, U8G2_DRAW_ALL);
+        u8g2_DrawDisc(&u8g2, 50, 40, 5, U8G2_DRAW_UPPER_LEFT | U8G2_DRAW_LOWER_RIGHT);
+        u8g2_DrawRFrame(&u8g2, 60, 26, 30, 16, 4);
+        u8g2_DrawEllipse(&u8g2, 64, 52, 12, 6, U8G2_DRAW_ALL);
+        u8g2_DrawArc(&u8g2, 90, 48, 9, 0, 128);
+        u8g2_DrawTriangle(&u8g2, 110, 50, 140, 70, 90, 70);
+        u8g2_DrawXBM(&u8g2, 4, 44, 8, 8, smiley);
+        u8g2_SetDrawColor(&u8g2, 2);
+        u8g2_DrawBox(&u8g2, 96, 0, 40, 16);
+        u8g2_SetDrawColor(&u8g2, 1);
+        u8g2_SetFont(&u8g2, u8g2_font_6x10_tf);
+        u8g2_DrawGlyph(&u8g2, 70, 60, 'A');
+        u8g2_DrawUTF8(&u8g2, 116, 60, "edge");
+        u8g2_SetFontDirection(&u8g2, 1);
+        u8g2_DrawUTF8(&u8g2, 20, 22, "up");
+        u8g2_SetFontDirection(&u8g2, 0);
+
+        FILE *out = fopen(argv[1], "wb");
+        if (!out || fwrite(u8g2_GetBufferPtr(&u8g2), 1, 1024, out) != 1024 || fclose(out)) return 2;
+        u8g2_SendBuffer(&u8g2);
+        return 0;
+    }
+    """
+
+private val C_DIR: string = "sh/sysl/u8g2/c"
+
+// Every byte and pin u8g2 asks for, spelled as the C driver prints it.
+private struct Tracer
+    log: Buf[string]
+
+impl Bus for Tracer
+    override init(*self) = self.log.push("I")
+
+    start(*self, address: u8) = self.log.push(s"S${hex(address, 2)}")
+
+    write(*self, bytes: []const u8)
+        var b = str_builder()
+        for x in bytes
+            b.push(hex(x, 2))
+        self.log.push(b.finish())
+
+    stop(*self) = self.log.push("E")
+
+    override data_mode(*self, data: bool) = self.log.push(if data then "C1" else "C0")
+
+    override reset(*self, high: bool) = self.log.push(if high then "R1" else "R0")
+
+    delay_ms(*self, ms: u32) = self.log.push(s"D$ms")
+
+private val SMILEY: [8]u8 = [0x3c, 0x42, 0xa5, 0x81, 0xa5, 0x99, 0x42, 0x3c]
+
+// The scene the C driver draws, through the binding.
+private draw_scene[B: Bus](d: *Display[B])
+    d.set_font(&font_6x10)
+    d.text(0, 10, "Hello, u8g2!")
+    d.set_font(&font_5x7)
+    d.text(2, 20, "Grüße 25°C")
+    d.frame(0, 0, 128, 64)
+    d.box(100, 30, 20, 12)
+    d.line(0, 63, 127, 24)
+    d.circle(30, 40, 10)
+    d.disc(-3, 50, 8)
+    d.disc(50, 40, 5, UPPER_LEFT | LOWER_RIGHT)
+    d.rounded_frame(60, 26, 30, 16, 4)
+    d.ellipse(64, 52, 12, 6)
+    d.arc(90, 48, 9, 0, 128)
+    d.triangle(110, 50, 140, 70, 90, 70)
+    d.bitmap(4, 44, 8, 8, SMILEY[..]).unwrap()
+    d.set_color(Color.Invert)
+    d.box(96, 0, 40, 16)
+    d.set_color(Color.On)
+    d.set_font(&font_6x10)
+    d.glyph(70, 60, 'A')
+    d.text(116, 60, "edge")
+    d.set_direction(Direction.Down)
+    d.text(20, 22, "up")
+    d.set_direction(Direction.Right)
+
+private joined(log: Buf[string]) -> string
+    var b = str_builder()
+    for item in log
+        b.push(item)
+        b.push(" ")
+    b.finish()
+
+@test("the binding draws the same frame buffer and sends the same bytes as u8g2 driven from C")
+same_scene_as_c()
+    val dir = make_temp_dir("u8g2-oracle-").unwrap()
+    val source = s"${dir}/driver.c"
+    val program = s"${dir}/driver"
+    val image = s"${dir}/buffer"
+    write_text(source, DRIVER).unwrap()
+    var args: Buf[string] = buf()
+    for item in ["-O1", "-ffunction-sections", "-fdata-sections", "-Wl,-dead_strip", "-w", "-I", C_DIR,
+                 "-DU8X8_WITH_USER_PTR", "-o", program, source]
+        args.push(item)
+    for name in entries(C_DIR).unwrap()
+        if name.ends_with(".c") then args.push(s"${C_DIR}/${name}")
+    val built = capture("clang", args.view(), stderr = true).unwrap()
+    assert(built.status.ok(), s"the C driver did not build: ${built.text}")
+    val ran = capture(program, [image], stderr = true).unwrap()
+    assert(ran.status.ok(), "the C driver failed")
+    val theirs = read_bytes(image).unwrap()
+
+    var bus = Tracer(buf())
+    var oled = ssd1306_i2c_128x64(&bus)
+    oled.begin()
+    bus.log.push("|")
+    draw_scene(&oled)
+    val ours = oled.buffer()
+    assert_eq(ours.len, theirs.len)
+    var first_difference = -1
+    for i in 0..<ours.len
+        if ours[i] != theirs[i] then
+            first_difference = int(i)
+            break
+    assert_eq(first_difference, -1)
+    oled.send()
+    assert_eq(joined(bus.log), ran.text)
+    remove_dir_all(dir).unwrap()

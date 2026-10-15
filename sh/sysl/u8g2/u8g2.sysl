@@ -1,0 +1,443 @@
+module sh.sysl.u8g2
+
+import sh.sysl.u8g2.c
+
+// Drawing and text on a small monochrome display (an SSD1306 or SH1106 OLED, and about a hundred
+// others), bound to u8g2: lines, boxes, circles, bitmaps and text in hundreds of fonts, drawn into a
+// frame buffer in RAM and sent to the display in one go.
+//
+// Nothing here allocates. A display is a value with u8g2's state inside it, and the frame buffer is
+// u8g2's own static array, sized for the display the setup names, so a board with no heap needs nothing
+// more than the display value itself.
+//
+// **A display that has begun must stay where it is.** u8g2 keeps pointers into its own state, so a
+// display is reached through a pointer once `begin` has run, and a copy of one taken after that is a
+// copy u8g2 knows nothing about.
+
+// How a display is reached: the I2C or SPI peripheral of a board, and the pins and delays around it.
+// u8g2 makes two kinds of call, one with the bytes for the display and one for pins and pauses; both
+// arrive here.
+trait Bus
+    // Set up the peripheral and the pins. Called once, by `begin`, before anything is sent.
+    init(*self) = ()
+
+    // A transfer begins. `address` is the display's 7-bit I2C address; SPI selects the chip here.
+    start(*self, address: u8)
+
+    // Bytes of the transfer, in order.
+    write(*self, bytes: []const u8)
+
+    // The transfer ends. SPI releases the chip here.
+    stop(*self)
+
+    // SPI only: the D/C line, high when what follows is data and low when it is commands. I2C carries
+    // the difference in the bytes themselves and never calls this.
+    data_mode(*self, data: bool) = ()
+
+    // The display's reset line, where it has one wired: high is running, low holds it in reset.
+    reset(*self, high: bool) = ()
+
+    // Wait `ms` milliseconds. Starting a display needs real pauses: `begin` asks for about 100 ms.
+    delay_ms(*self, ms: u32)
+
+    // Wait `us` microseconds. Only a bus that toggles its pins by hand asks for this.
+    delay_us(*self, us: u32) = ()
+
+// The display's orientation, applied to everything drawn after it is set.
+enum Rotation
+    R0
+    R90
+    R180
+    R270
+    Mirror
+    MirrorVertical
+
+// What drawing does to a pixel.
+enum Color
+    Off
+    On
+    Invert
+
+// Which way text runs.
+enum Direction
+    Right
+    Down
+    Left
+    Up
+
+// What the `y` of `text` names: the baseline of the letters (the default), or the top, the middle or
+// the bottom of the font's tallest letter.
+enum Anchor
+    Baseline
+    Top
+    Center
+    Bottom
+
+// Which quarters of a circle or disc to draw. `ALL` is the whole one; the others combine with `|`.
+const UPPER_RIGHT: u8 = c.DRAW_UPPER_RIGHT
+const UPPER_LEFT: u8 = c.DRAW_UPPER_LEFT
+const LOWER_LEFT: u8 = c.DRAW_LOWER_LEFT
+const LOWER_RIGHT: u8 = c.DRAW_LOWER_RIGHT
+const ALL: u8 = c.DRAW_ALL
+
+// Why a drawing call refused.
+enum Error derives sysl.Display
+    // The bitmap holds fewer bytes than its width and height need: `(width + 7) / 8` per row.
+    BitmapTooShort
+
+// A u8g2 font. A font is an array in u8g2's C, and a program names the one it wants with an `extern`
+// of this type, then hands `set_font` its address:
+//
+//     extern "u8g2_font_6x10_tf" font_6x10: Font
+//     oled.set_font(&font_6x10)
+//
+// `sh.sysl.u8g2.fonts` declares a few. Only the fonts a program names end up in its image.
+type Font = c.Font
+
+// A display's setup function: one of u8g2's `u8g2_Setup_<controller>_<bus>_<size>_<buffer>`. The
+// package names the ones below; any other is one `extern` away:
+//
+//     extern "u8g2_Setup_ssd1309_i2c_128x64_noname0_f" setup_ssd1309(u8g2: *c.U8g2, rotation: *c.Rotation, byte_cb: c.Msg, gpio_cb: c.Msg)
+//     var oled = display(&bus, &setup_ssd1309)
+type Setup = c.Setup
+
+// The longest text drawn in one call, in bytes. u8g2 reads text up to a NUL, so a display keeps room
+// for a terminated copy; a longer string is drawn up to the last whole character that fits, which is
+// more than any display u8g2 drives can show on one line.
+const MAX_TEXT: usize = 255
+
+private[u8g2] const U8G2_WORDS: usize = (c.U8G2_SIZE + 7) / 8
+
+// A display on a bus `B`, not yet begun until `begin`.
+struct Display[B: Bus]
+    private state: [U8G2_WORDS]u64
+    private terminated_text: [MAX_TEXT + 1]u8
+    private bus: *B
+    private setup: Setup
+    private rotation: Rotation
+    private begun: bool
+
+    // Set the display up and switch it on: u8g2 is given its buffer and callbacks, the display is
+    // reset and sent its start-up commands, and the frame buffer is cleared. From here on the display
+    // must not move.
+    begin(*self)
+        self.configure()
+        c.init_display(self.u8x8())
+        c.set_power_save(self.u8x8(), 0)
+        c.clear_buffer(self.u8g2())
+
+    // Give u8g2 its state without talking to the display: what `begin` does first. Drawing into the
+    // frame buffer works from here; `begin` is still what switches the display on.
+    configure(*self)
+        (self.setup)(self.u8g2(), rotation_table(self.rotation), &on_byte[B], &on_gpio[B])
+        var slot: **u8 = ptr_cast(self.field(c.AT_USER_PTR))
+        *slot = ptr_cast(self.bus)
+        self.begun = true
+
+    // Whether `begin` or `configure` has run.
+    is_begun(self) -> bool = self.begun
+
+    // The I2C address the display answers on, 7-bit (0x3c for most SSD1306 modules, 0x3d for the
+    // rest). Set it after `configure` and before `begin`, or at any point after.
+    set_i2c_address(*self, address: u8)
+        var at: *u8 = self.field(c.AT_I2C_ADDRESS)
+        *at = address << 1
+
+    i2c_address(*self) -> u8 = *self.field(c.AT_I2C_ADDRESS) >> 1
+
+    // Blank the panel to save power, keeping what it shows; `false` brings it back.
+    sleep(*self, on: bool) = c.set_power_save(self.u8x8(), if on then 1 else 0)
+
+    // The panel's brightness, 0 to 255.
+    set_contrast(*self, value: u8) = c.set_contrast(self.u8x8(), value)
+
+    // Turn the picture; what is already in the buffer is not redrawn.
+    set_rotation(*self, rotation: Rotation)
+        self.rotation = rotation
+        c.set_display_rotation(self.u8g2(), rotation_table(rotation))
+
+    // Clear the frame buffer. Nothing reaches the display until `send`.
+    clear(*self) = c.clear_buffer(self.u8g2())
+
+    // Send the whole frame buffer to the display.
+    send(*self) = c.send_buffer(self.u8g2())
+
+    // Clear the frame buffer and the display.
+    clear_display(*self) = c.clear_display(self.u8g2())
+
+    // With a page-buffer setup (`_1`, `_2`), the picture is drawn once per page: draw everything
+    // between `first_page` and each `next_page`, until `next_page` answers false.
+    first_page(*self) = c.first_page(self.u8g2())
+
+    next_page(*self) -> bool = c.next_page(self.u8g2()) != 0
+
+    // Width and height in pixels, as rotated.
+    width(*self) -> int = int(*self.coord_field(c.AT_WIDTH))
+
+    height(*self) -> int = int(*self.coord_field(c.AT_HEIGHT))
+
+    // The frame buffer as u8g2 lays it out for this display: for an SSD1306, `width / 8` tiles of 8
+    // bytes per tile row, each byte a column of 8 pixels with the top one in bit 0.
+    buffer(*self) -> []u8
+        var at: **u8 = ptr_cast(self.field(c.AT_TILE_BUF_PTR))
+        val n = usize(self.tile_width()) * 8 * usize(self.buffer_tile_height())
+        (*at)[0..<n]
+
+    // The buffer's width in tiles of 8 by 8 pixels, and the display's height in them.
+    tile_width(*self) -> u8 = *self.info_field(c.AT_TILE_WIDTH)
+
+    tile_height(*self) -> u8 = *self.info_field(c.AT_TILE_HEIGHT)
+
+    // How many tile rows the buffer holds: all of them for a full buffer, one or two for a page.
+    buffer_tile_height(*self) -> u8 = *self.field(c.AT_TILE_BUF_HEIGHT)
+
+    // What drawing does from here on: set pixels (`On`), clear them (`Off`) or flip them (`Invert`).
+    set_color(*self, color: Color)
+        c.set_draw_color(self.u8g2(), color match
+            Color.Off -> 0
+            Color.On -> 1
+            Color.Invert -> 2)
+
+    color(*self) -> Color
+        *self.field(c.AT_DRAW_COLOR) match
+            0 -> Color.Off
+            1 -> Color.On
+            _ -> Color.Invert
+
+    // Draw only inside the box from (`x0`, `y0`) up to but not including (`x1`, `y1`).
+    clip(*self, x0: int, y0: int, x1: int, y1: int)
+        c.set_clip_window(self.u8g2(), coord(x0), coord(y0), coord(x1), coord(y1))
+
+    // Draw anywhere on the display again.
+    unclip(*self) = c.set_max_clip_window(self.u8g2())
+
+    pixel(*self, x: int, y: int) = c.draw_pixel(self.u8g2(), coord(x), coord(y))
+
+    // A line `len` pixels long, to the right of or below (`x`, `y`).
+    hline(*self, x: int, y: int, len: int) = c.draw_hline(self.u8g2(), coord(x), coord(y), coord(len))
+
+    vline(*self, x: int, y: int, len: int) = c.draw_vline(self.u8g2(), coord(x), coord(y), coord(len))
+
+    line(*self, x1: int, y1: int, x2: int, y2: int)
+        c.draw_line(self.u8g2(), coord(x1), coord(y1), coord(x2), coord(y2))
+
+    // A filled box, `w` wide and `h` high, its top left corner at (`x`, `y`).
+    box(*self, x: int, y: int, w: int, h: int) = c.draw_box(self.u8g2(), coord(x), coord(y), coord(w), coord(h))
+
+    // The outline of the same box.
+    frame(*self, x: int, y: int, w: int, h: int)
+        c.draw_frame(self.u8g2(), coord(x), coord(y), coord(w), coord(h))
+
+    // A box with corners rounded to radius `r`; `w` and `h` must be at least `2 * r + 1`.
+    rounded_box(*self, x: int, y: int, w: int, h: int, r: int)
+        c.draw_rbox(self.u8g2(), coord(x), coord(y), coord(w), coord(h), coord(r))
+
+    rounded_frame(*self, x: int, y: int, w: int, h: int, r: int)
+        c.draw_rframe(self.u8g2(), coord(x), coord(y), coord(w), coord(h), coord(r))
+
+    // A circle of radius `r` centred on (`x`, `y`); `quarters` picks parts of it (`ALL` by default).
+    circle(*self, x: int, y: int, r: int, quarters: u8 = ALL)
+        c.draw_circle(self.u8g2(), coord(x), coord(y), coord(r), quarters)
+
+    // A filled circle.
+    disc(*self, x: int, y: int, r: int, quarters: u8 = ALL)
+        c.draw_disc(self.u8g2(), coord(x), coord(y), coord(r), quarters)
+
+    ellipse(*self, x: int, y: int, rx: int, ry: int, quarters: u8 = ALL)
+        c.draw_ellipse(self.u8g2(), coord(x), coord(y), coord(rx), coord(ry), quarters)
+
+    filled_ellipse(*self, x: int, y: int, rx: int, ry: int, quarters: u8 = ALL)
+        c.draw_filled_ellipse(self.u8g2(), coord(x), coord(y), coord(rx), coord(ry), quarters)
+
+    // Part of a circle, from angle `start` to `end` counterclockwise, where 256 is a full turn and 0 is
+    // three o'clock.
+    arc(*self, x: int, y: int, r: int, start: u8, end: u8)
+        c.draw_arc(self.u8g2(), coord(x), coord(y), coord(r), start, end)
+
+    // A filled triangle. Its corners may lie off the display.
+    triangle(*self, x0: int, y0: int, x1: int, y1: int, x2: int, y2: int)
+        c.draw_triangle(self.u8g2(), i16(x0), i16(y0), i16(x1), i16(y1), i16(x2), i16(y2))
+
+    // An XBM bitmap, `w` by `h`: rows of `(w + 7) / 8` bytes, the leftmost pixel in bit 0. Set pixels
+    // are drawn in the draw colour; clear ones in the other colour, unless `transparent_bitmaps` is on.
+    bitmap(*self, x: int, y: int, w: int, h: int, bits: []const u8) -> Result[unit, Error]
+        if w < 0 || h < 0 || bits.len < usize((w + 7) / 8 * h) then return Err(Error.BitmapTooShort)
+        c.draw_xbm(self.u8g2(), coord(x), coord(y), coord(w), coord(h), ptr_cast(&bits[0]))
+        Ok(())
+
+    // Whether a bitmap's clear pixels are left alone (true) or drawn.
+    transparent_bitmaps(*self, on: bool) = c.set_bitmap_mode(self.u8g2(), if on then 1 else 0)
+
+    // The font text is drawn in from here on.
+    set_font(*self, font: *Font) = c.set_font(self.u8g2(), font)
+
+    // Whether the background of each letter is left alone (true) or cleared.
+    transparent_text(*self, on: bool) = c.set_font_mode(self.u8g2(), if on then 1 else 0)
+
+    set_direction(*self, direction: Direction)
+        c.set_font_direction(self.u8g2(), direction match
+            Direction.Right -> 0
+            Direction.Down -> 1
+            Direction.Left -> 2
+            Direction.Up -> 3)
+
+    set_anchor(*self, anchor: Anchor)
+        anchor match
+            Anchor.Baseline -> c.set_font_pos_baseline(self.u8g2())
+            Anchor.Top -> c.set_font_pos_top(self.u8g2())
+            Anchor.Center -> c.set_font_pos_center(self.u8g2())
+            Anchor.Bottom -> c.set_font_pos_bottom(self.u8g2())
+
+    // Draw `s`, UTF-8, starting at (`x`, `y`); `y` is the baseline unless `set_anchor` said otherwise.
+    // Answers how far the text reaches, in pixels. A character the font does not carry is skipped.
+    text(*self, x: int, y: int, s: string) -> int
+        val p = self.terminated(s)
+        int(c.draw_utf8(self.u8g2(), coord(x), coord(y), p))
+
+    // How wide `s` is in the current font, in pixels.
+    text_width(*self, s: string) -> int
+        val p = self.terminated(s)
+        int(c.get_utf8_width(self.u8g2(), p))
+
+    // One character, answering its width. One beyond U+FFFF, which u8g2 cannot name, draws nothing.
+    glyph(*self, x: int, y: int, ch: char) -> int
+        val code = u32(ch)
+        if code > 0xffff then return 0
+        int(c.draw_glyph(self.u8g2(), coord(x), coord(y), u16(code)))
+
+    // Whether the current font carries `ch`.
+    has_glyph(*self, ch: char) -> bool
+        val code = u32(ch)
+        code <= 0xffff && c.is_glyph(self.u8g2(), u16(code)) != 0
+
+    // How far the current font reaches above the baseline, and below it (a negative number).
+    ascent(*self) -> int = int(*self.signed_field(c.AT_FONT_REF_ASCENT))
+
+    descent(*self) -> int = int(*self.signed_field(c.AT_FONT_REF_DESCENT))
+
+    // The largest character of the current font, in pixels.
+    max_char_width(*self) -> int = int(*self.signed_field(c.AT_MAX_CHAR_WIDTH))
+
+    max_char_height(*self) -> int = int(*self.signed_field(c.AT_MAX_CHAR_HEIGHT))
+
+    private u8g2(*self) -> *c.U8g2 = ptr_cast(&self.state[0])
+
+    private u8x8(*self) -> *c.U8x8 = ptr_cast(&self.state[0])
+
+    // A byte of u8g2's state, `at` bytes in.
+    private field(*self, at: usize) -> *u8
+        var base: *u8 = ptr_cast(&self.state[0])
+        &base[at]
+
+    private coord_field(*self, at: usize) -> *u16 = ptr_cast(self.field(at))
+
+    private signed_field(*self, at: usize) -> *i8 = ptr_cast(self.field(at))
+
+    // A byte of the display's description, which u8g2 keeps a pointer to.
+    private info_field(*self, at: usize) -> *u8
+        var slot: **u8 = ptr_cast(self.field(c.AT_DISPLAY_INFO))
+        &(*slot)[at]
+
+    // `s` copied into the display's text buffer with a NUL after it, cut at the last whole character
+    // that fits.
+    private terminated(*self, s: string) -> *u8
+        var n = s.bytes.len
+        if n > MAX_TEXT then
+            n = MAX_TEXT
+            while n > 0 && s.bytes[n] & 0xc0 == 0x80
+                n -= 1
+        for i in 0..<n
+            self.terminated_text[i] = s.bytes[i]
+        self.terminated_text[n] = 0
+        &self.terminated_text[0]
+end Display
+
+// A display set up by `setup`, on `bus`, turned by `rotation`. Nothing is sent until `begin`, and it
+// may be moved until then.
+display[B: Bus](bus: *B, setup: Setup, rotation: Rotation = Rotation.R0) -> Display[B]
+    Display([0; U8G2_WORDS], [0; MAX_TEXT + 1], bus, setup, rotation, false)
+
+// The displays the package names. Each keeps its whole picture in a frame buffer in RAM, 1,024 bytes
+// for a 128 by 64 display: draw, then `send`.
+
+// An SSD1306, 128 by 64, on I2C: the usual 0.96-inch OLED module.
+ssd1306_i2c_128x64[B: Bus](bus: *B, rotation: Rotation = Rotation.R0) -> Display[B]
+    display(bus, &c.setup_ssd1306_i2c_128x64_noname_f, rotation)
+
+// The same display on 4-wire SPI.
+ssd1306_spi_128x64[B: Bus](bus: *B, rotation: Rotation = Rotation.R0) -> Display[B]
+    display(bus, &c.setup_ssd1306_128x64_noname_f, rotation)
+
+// An SSD1306, 128 by 32, on I2C: the 0.91-inch strip.
+ssd1306_i2c_128x32[B: Bus](bus: *B, rotation: Rotation = Rotation.R0) -> Display[B]
+    display(bus, &c.setup_ssd1306_i2c_128x32_univision_f, rotation)
+
+// An SH1106, 128 by 64, on I2C: the 1.3-inch OLED module.
+sh1106_i2c_128x64[B: Bus](bus: *B, rotation: Rotation = Rotation.R0) -> Display[B]
+    display(bus, &c.setup_sh1106_i2c_128x64_noname_f, rotation)
+
+// The same display on 4-wire SPI.
+sh1106_spi_128x64[B: Bus](bus: *B, rotation: Rotation = Rotation.R0) -> Display[B]
+    display(bus, &c.setup_sh1106_128x64_noname_f, rotation)
+
+// An SSD1306 128 by 64 with a buffer of one page (128 bytes): draw the picture once per page between
+// `first_page` and `next_page`.
+ssd1306_i2c_128x64_paged[B: Bus](bus: *B, rotation: Rotation = Rotation.R0) -> Display[B]
+    display(bus, &c.setup_ssd1306_i2c_128x64_noname_1, rotation)
+
+// A display that is not there: drawing does nothing and nothing is sent. Its buffer is one tile row
+// of 8 pixels.
+null_display[B: Bus](bus: *B, rotation: Rotation = Rotation.R0) -> Display[B]
+    display(bus, &c.setup_null, rotation)
+
+private rotation_table(r: Rotation) -> *c.Rotation
+    r match
+        Rotation.R0 -> &c.cb_r0
+        Rotation.R90 -> &c.cb_r1
+        Rotation.R180 -> &c.cb_r2
+        Rotation.R270 -> &c.cb_r3
+        Rotation.Mirror -> &c.cb_mirror
+        Rotation.MirrorVertical -> &c.cb_mirror_vertical
+
+// A coordinate as u8g2 takes it: 16 bits that wrap, so a position just left of or above the display is
+// a very large one, which u8g2 clips like any other position off the display.
+private coord(v: int) -> u16 = u16(v & 0xffff)
+
+// The two functions u8g2 calls, one instantiation per bus type. Each finds its bus through the user
+// pointer `configure` set.
+
+private bus_of[B: Bus](u8x8: *c.U8x8) -> *B
+    var base: *u8 = ptr_cast(u8x8)
+    var slot: **u8 = ptr_cast(&base[c.AT_USER_PTR])
+    ptr_cast(*slot)
+
+private on_byte[B: Bus](u8x8: *c.U8x8, msg: u8, arg_int: u8, arg_ptr: *u8) -> u8
+    var bus = bus_of[B](u8x8)
+    if msg == c.MSG_BYTE_SEND then
+        bus.write(arg_ptr[0..<usize(arg_int)])
+    else if msg == c.MSG_BYTE_START_TRANSFER then
+        var base: *u8 = ptr_cast(u8x8)
+        bus.start(base[c.AT_I2C_ADDRESS] >> 1)
+    else if msg == c.MSG_BYTE_END_TRANSFER then
+        bus.stop()
+    else if msg == c.MSG_BYTE_SET_DC then
+        bus.data_mode(arg_int != 0)
+    else if msg == c.MSG_BYTE_INIT then
+        bus.init()
+    else
+        return 0
+    1
+
+private on_gpio[B: Bus](u8x8: *c.U8x8, msg: u8, arg_int: u8, arg_ptr: *u8) -> u8
+    var bus = bus_of[B](u8x8)
+    if msg == c.MSG_DELAY_MILLI then
+        bus.delay_ms(u32(arg_int))
+    else if msg == c.MSG_DELAY_10MICRO then
+        bus.delay_us(u32(arg_int) * 10)
+    else if msg == c.MSG_DELAY_I2C then
+        bus.delay_us(u32(arg_int))
+    else if msg == c.MSG_GPIO_RESET then
+        bus.reset(arg_int != 0)
+    else if msg == c.MSG_GPIO_DC then
+        bus.data_mode(arg_int != 0)
+    1
