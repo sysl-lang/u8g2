@@ -4,6 +4,8 @@ Drawing and text on small monochrome displays (the SSD1306 and SH1106 OLED modul
 microcontroller kit, and about a hundred other controllers), bound to
 [u8g2](https://github.com/olikraus/u8g2) 2.37.1, vendored unchanged.
 
+*An independent sysl package for u8g2. It is not affiliated with or endorsed by u8g2's authors or trademark holders.*
+
 - **Lines, boxes, circles, discs, ellipses, arcs, triangles and bitmaps**, drawn into a frame buffer in
   RAM and sent to the display with one call.
 - **Text in hundreds of fonts**, from UTF-8, in four directions.
