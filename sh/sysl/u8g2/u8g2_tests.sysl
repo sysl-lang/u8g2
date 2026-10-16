@@ -450,3 +450,26 @@ null_display_is_quiet()
     oled.box(0, 0, 100, 100)
     oled.send()
     assert_eq(bus.bytes.len(), 0)
+
+// A bus that does nothing, small enough to sit in module storage.
+private struct Quiet
+    writes: int
+
+impl Bus for Quiet
+    start(*self, address: u8) = ()
+    write(*self, bytes: []const u8)
+        self.writes += 1
+    stop(*self) = ()
+    delay_ms(*self, ms: u32) = ()
+
+private var shelf_bus: Quiet = Quiet(0)
+private var shelf_display: Display[Quiet] = ssd1306_i2c_128x64(&shelf_bus)
+
+@test("a display declared as module storage through the const constructor begins and draws")
+display_in_module_storage()
+    shelf_display.begin()
+    shelf_display.pixel(3, 4)
+    assert_eq(shelf_display.width(), 128)
+    assert_eq(count_lit(shelf_display.buffer()), 1)
+    shelf_display.send()
+    assert_eq(shelf_bus.writes > 0, true)

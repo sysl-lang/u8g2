@@ -5,14 +5,14 @@
 // This is the block a consumer writes to reach it:
 //
 //     dependencies {
-//       u8g2 { git = "github.com/sysl-lang/u8g2", version = "<the first tag>" }
+//       u8g2 { git = "github.com/sysl-lang/u8g2", version = "0.1.0" }
 //     }
 //
 // The module is `sh.sysl.u8g2`.
 
 package {
   name    = "u8g2"
-  version = "0.0.1"
+  version = "0.1.0"
 }
 
 // **What u8g2 is compiled with is this package's decision, not a consumer's.** One option:

@@ -1,6 +1,6 @@
 # What vendoring u8g2 found in sysl
 
-Found against sysl 0.1.0-alpha.12. Nothing below is worked around in the package.
+Found against sysl 0.1.0-alpha.12; every finding is fixed as of sysl 0.1.1. Nothing was worked around in the package.
 
 ## 1. `build-lib` refuses carried C that is not UTF-8 (bug)
 
@@ -16,8 +16,7 @@ return 7; }`. The compiler reads every carried `.c` as text (`std_artifact.sysl`
 `run_cache.sysl`); C source is bytes, so it should be read and hashed as bytes. The workaround not
 taken: transcoding upstream's files.
 
-**Status: accepted for alpha.14** (sysl branch `c-bytes`: C is read and hashed as bytes, and the error
-names its reason).
+**Status: Fixed in sysl 0.1.x; workaround removed.** (`build-lib` of this package now gets past the font files; what remains is the next section.)
 
 ## 2. Module storage whose initializer holds an address cannot go into a freestanding image (gap)
 
@@ -36,9 +35,7 @@ relocations. Possibly the same root as skiff's FINDINGS 6 (accepted for alpha.13
 bare-metal program keeps its bus and display as locals of its entry function, as the README says. The
 workaround not taken: an API of `begin(&bus)` plus a setup enum.
 
-**Status: accepted for alpha.14** (sysl branch `addr-fold`: addresses of module storage and of
-functions fold as relocations, including through a const constructor that only stores a function
-pointer).
+**Status: Fixed in sysl 0.1.x; workaround removed.** The display constructors are `const`, and a display declared as module storage is laid into a thumbv7em-freestanding image as data (`sysl emit-llvm --target thumbv7em-freestanding` shows `@oled = { ..., ptr @bus, ptr @u8g2_Setup_..., ... }`); `display_in_module_storage` in the tests keeps the shape.
 
 ## 3. `unit` has no `Eq` (gap)
 
@@ -46,10 +43,9 @@ pointer).
 sh.sysl.u8g2.Error] needs 'sysl.Eq' … unit, which does not implement it`. The tests compare `.err()`.
 The same as `sysl-lang/fat`'s FINDINGS 5.
 
-**Status: Fixed in 0.1.0-alpha.13.** The tests compare the `Result` directly.
+**Status: Fixed in sysl 0.1.x; workaround removed.** The tests compare the `Result` directly.
 
 ## Also blocking bare metal
 
 Past finding 1, `build-c` for `thumb-freestanding` stops at `mui.h:79:10: fatal error: 'string.h' file
-not found`: a package's C cannot use `sysl-lang/cstd`'s headers yet (littlefs's FINDINGS 1, accepted for
-alpha.14).
+not found`: a package's C cannot use `sysl-lang/cstd`'s headers yet (littlefs's FINDINGS 1). Still open: a full bare-metal build waits on cstd.

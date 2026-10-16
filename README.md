@@ -15,7 +15,7 @@ microcontroller kit, and about a hundred other controllers), bound to
 
 ```hocon
 dependencies {
-  u8g2 { git = "github.com/sysl-lang/u8g2", version = "<the first tag>" }
+  u8g2 { git = "github.com/sysl-lang/u8g2", version = "0.1.0" }
 }
 ```
 
@@ -60,11 +60,10 @@ have bodies that do nothing, so an I2C bus writes the four above and no more.
 
 **A display that has begun must stay where it is**, because u8g2 keeps pointers into its own state and
 the binding hands u8g2 the bus's address. A copy taken after `begin` is a display u8g2 knows nothing
-about. (sysl's coming `@pinned` will refuse such a copy.)
+about. `Display` is `@pinned`, so sysl refuses such a copy.
 
-**On a bare board today, keep the bus and the display in locals of the entry function**, not in module
-storage: sysl cannot yet lay a value holding an address into a freestanding image (see "Bare metal"
-below).
+**On a bare board, declare the bus and the display as module storage**: the constructors are `const`,
+so `var oled: Display[Quiet] = ssd1306_i2c_128x64(&bus)` is laid into the image as data.
 
 | | |
 |---|---|
@@ -162,23 +161,19 @@ array inside u8g2 (`u8g2_m_16_8_f` and the like), one per buffer size. Two diffe
 
 ## Bare metal
 
-The package needs no operating system and no allocator, but today it does not build for a freestanding
-target:
+The package needs no operating system and no allocator. Two things hold a full freestanding build back:
 
-- `sysl build-lib . --target thumb-freestanding` stops at `sysl: error: cannot read
-  …/sh/sysl/u8g2/c/u8g2_fonts.c`: the compiler reads carried C as UTF-8 text, and u8g2's two font files
-  each have one Latin-1 byte in a comment. This is a compiler bug, reported.
-- Past that, `sysl build-c` of a program stops at `mui.h:79:10: fatal error: 'string.h' file not
-  found`: a package's C cannot yet be given `sysl-lang/cstd`'s headers. Accepted for alpha.14.
-- A display in module storage cannot be laid into a freestanding image, because its initializer holds
-  the address of its bus and of a setup function. Reported; meanwhile keep both in locals of the entry
-  function.
+- `sysl build-c` of a program stops at `mui.h:79:10: fatal error: 'string.h' file not found`: a
+  package's C cannot yet be given `sysl-lang/cstd`'s headers.
+- Everything on the sysl side does build: `sysl emit-llvm --target thumbv7em-freestanding` on a program
+  that declares `var oled: Display[Quiet] = ssd1306_i2c_128x64(&bus)` as module storage lays the display
+  into the image as data, with the bus and the setup function as link-time addresses.
 
 A target with a C library (the Pico SDK's newlib, Zephyr, FreeRTOS) has the headers already.
 
 ## Tests
 
-`sysl test .` runs 23 tests.
+`sysl test .` runs 24 tests.
 
 - **Against u8g2 driven from C.** A C program written straight against `u8g2.h`, built with clang from
   the same vendored source with the same option, sets up an SSD1306 128x64 on I2C, starts it, and draws
