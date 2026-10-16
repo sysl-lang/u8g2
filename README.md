@@ -198,7 +198,7 @@ with the `R180` table (11); `font_6x10` naming `u8g2_font_6x12_tf` (2); every co
 unshifted (3); the reset line inverted (2, after the `begin` test was made to check the reset levels;
 before, only the oracle saw it); `On` and `Off` swapped (2).
 
-**AddressSanitizer**: `SYSL_EXTRA_CFLAGS="-fsanitize=address -g" sysl test .` passes 23/23. The test
+**AddressSanitizer**: `SYSL_EXTRA_CFLAGS="-fsanitize=address -g" sysl test .` passes 24/24. The test
 binary links 10 `__asan_report` hooks, and u8g2's own C is instrumented too (`u8g2_font_decode_glyph`
 reads the shadow memory).
 
