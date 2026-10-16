@@ -47,5 +47,8 @@ The same as `sysl-lang/fat`'s FINDINGS 5.
 
 ## Also blocking bare metal
 
-Past finding 1, `build-c` for `thumb-freestanding` stops at `mui.h:79:10: fatal error: 'string.h' file
-not found`: a package's C cannot use `sysl-lang/cstd`'s headers yet (littlefs's FINDINGS 1). Still open: a full bare-metal build waits on cstd.
+Past finding 1, `build-c` for `thumb-freestanding` stopped at `mui.h:79:10: fatal error: 'string.h' file
+not found`: a package's C could not use `sysl-lang/cstd`'s headers (littlefs's FINDINGS 1).
+
+**Status: Fixed in sysl 0.1.2.** `cstd { ..., if = "!libc" }` gives the C cstd's headers on a board; the
+suite builds the package for `thumbv7em-freestanding` and `riscv32-freestanding`.

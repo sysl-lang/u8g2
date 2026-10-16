@@ -15,7 +15,7 @@ microcontroller kit, and about a hundred other controllers), bound to
 
 ```hocon
 dependencies {
-  u8g2 { git = "github.com/sysl-lang/u8g2", version = "0.1.0" }
+  u8g2 { git = "github.com/sysl-lang/u8g2", version = "0.1.1" }
 }
 ```
 
@@ -140,8 +140,8 @@ The image keeps `u8g2_font_6x10_tf` and no other font, `u8g2_Setup_ssd1306_i2c_1
 no other setup, and the one SSD1306 driver. Without section garbage collection every font and driver
 would land in flash: 14 MB, against the Pico 2's 4 MB.
 
-The Cortex-M rows were built from the vendored C directly, because `sysl build-c` for
-`thumb-freestanding` does not yet get that far (see "Bare metal").
+The Cortex-M rows were built from the vendored C directly, before the package could take cstd as its
+libc (see "Bare metal").
 
 ## What it is compiled with, and what is left out
 
@@ -161,19 +161,21 @@ array inside u8g2 (`u8g2_m_16_8_f` and the like), one per buffer size. Two diffe
 
 ## Bare metal
 
-The package needs no operating system and no allocator. Two things hold a full freestanding build back:
+The package needs no operating system and no allocator, and it builds for boards with
+`sysl-lang/cstd` as its C library (it needs sysl 0.1.2 or later). The dependency is declared
+`if = "!libc"`, so a target that has a C library of its own (the host, the Pico SDK's newlib, Zephyr,
+FreeRTOS) drops it. The suite builds the package with `sysl build-c` for `thumbv7em-freestanding` and
+`riscv32-freestanding` and checks with `nm` that the archive defines u8g2's entry points and cstd's
+`memset` and `printf`, which the C calls.
 
-- `sysl build-c` of a program stops at `mui.h:79:10: fatal error: 'string.h' file not found`: a
-  package's C cannot yet be given `sysl-lang/cstd`'s headers.
-- Everything on the sysl side does build: `sysl emit-llvm --target thumbv7em-freestanding` on a program
-  that declares `var oled: Display[Quiet] = ssd1306_i2c_128x64(&bus)` as module storage lays the display
-  into the image as data, with the bus and the setup function as link-time addresses.
-
-A target with a C library (the Pico SDK's newlib, Zephyr, FreeRTOS) has the headers already.
+On the sysl side, `sysl emit-llvm --target thumbv7em-freestanding` on a program that declares
+`var oled: Display[Quiet] = ssd1306_i2c_128x64(&bus)` as module storage lays the display into the image
+as data, with the bus and the setup function as link-time addresses.
 
 ## Tests
 
-`sysl test .` runs 24 tests.
+`sysl test .` runs 26 tests, the last two building the package for `thumbv7em-freestanding` and
+`riscv32-freestanding` against cstd.
 
 - **Against u8g2 driven from C.** A C program written straight against `u8g2.h`, built with clang from
   the same vendored source with the same option, sets up an SSD1306 128x64 on I2C, starts it, and draws
@@ -198,8 +200,8 @@ with the `R180` table (11); `font_6x10` naming `u8g2_font_6x12_tf` (2); every co
 unshifted (3); the reset line inverted (2, after the `begin` test was made to check the reset levels;
 before, only the oracle saw it); `On` and `Off` swapped (2).
 
-**AddressSanitizer**: `SYSL_EXTRA_CFLAGS="-fsanitize=address -g" sysl test .` passes 24/24. The test
-binary links 10 `__asan_report` hooks, and u8g2's own C is instrumented too (`u8g2_font_decode_glyph`
+**AddressSanitizer**: `SYSL_EXTRA_CFLAGS="-fsanitize=address -g" sysl test .` passes 26/26. The package
+archive built under the same flag links 371 `__asan_report` hooks, and u8g2's own C is instrumented too (`u8g2_font_decode_glyph`
 reads the shadow memory).
 
 ## Vendored

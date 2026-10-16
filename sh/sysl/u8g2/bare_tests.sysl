@@ -1,0 +1,49 @@
+module sh.sysl.u8g2
+@tests
+@requires(heap, os)
+
+// u8g2 on a board. The vendored C includes `<string.h>` and `<stdio.h>` by system name; the package
+// takes cstd with `if = "!libc"`, so on a bare-metal target the C compiles against cstd's headers and
+// the archive carries cstd's definitions of what the C calls.
+
+import sysl.buf.{Buf, buf}
+import sysl.fs.make_dir_all
+import sysl.process.capture
+import sysl.testing.compiler
+import sysl.text.split
+
+// What u8g2's C calls from the libc, one per header it reaches.
+private val called: []string = ["memset", "printf"]
+
+// A few of the package's own entry points.
+private val own: []string = ["u8g2_DrawStr", "u8g2_Setup_ssd1306_i2c_128x64_noname_f", "u8x8_u8toa"]
+
+// The global symbols the archive `build-c` writes for this package defines, one name per line.
+private defines(target: string) -> string
+    val dir = f".sysl/bare-tests/$target"
+    make_dir_all(dir).unwrap()
+    val lib = f"$dir/libu8g2.a"
+    var args: Buf[string] = buf()
+    for a in ["build-c", ".", "-o", lib, "--target", target] do args.push(a)
+    val built = capture(compiler(), args.view(), stderr = true).unwrap()
+    if !built.status.ok() then panic(f"build-c of u8g2 for $target failed:\n${built.err.unwrap_or("")}")
+    val listed = capture("nm", ["-g", lib]).unwrap()
+    assert(listed.status.ok())
+    var defined = "\n"
+    for line in split(listed.text, "\n")
+        val t = line.index_of(" T ")
+        if t.is_some() then defined += f"${line[t.unwrap() + 3..<line.len]}\n"
+    defined
+
+private bare_case(target: string)
+    val defined = defines(target)
+    for n in own
+        if !defined.contains(f"\n$n\n") then panic(f"$target: the archive does not define $n")
+    for n in called
+        if !defined.contains(f"\n$n\n") then panic(f"$target: the archive does not define $n, so cstd was not its libc")
+
+@test("on thumbv7em the C compiles against cstd and the archive defines what it calls")
+bare_thumbv7em() = bare_case("thumbv7em-freestanding")
+
+@test("on riscv32 the C compiles against cstd and the archive defines what it calls")
+bare_riscv32() = bare_case("riscv32-freestanding")
