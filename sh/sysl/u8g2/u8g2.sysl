@@ -1,6 +1,7 @@
 module sh.sysl.u8g2
 
 import sh.sysl.u8g2.c
+import sysl.raw.ptr_cast
 
 // Drawing and text on a small monochrome display (an SSD1306 or SH1106 OLED, and about a hundred
 // others), bound to u8g2: lines, boxes, circles, bitmaps and text in hundreds of fonts, drawn into a

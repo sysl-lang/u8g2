@@ -15,7 +15,7 @@ microcontroller kit, and about a hundred other controllers), bound to
 
 ```hocon
 dependencies {
-  u8g2 { git = "github.com/sysl-lang/u8g2", version = "0.1.1" }
+  u8g2 { git = "github.com/sysl-lang/u8g2", version = "0.1.2" }
 }
 ```
 
@@ -211,7 +211,7 @@ reads the shadow memory).
 `https://github.com/olikraus/u8g2/archive/refs/tags/2.37.1.tar.gz` whose SHA-256 is
 `16e63a2e131550a8e22a26bfbb4730e0015de5c9397532d8852a1659441c97ec`. Vendoring means upstream fixes do
 not arrive on their own: watch u8g2's releases and re-vendor (and add any new `.c` to the `defines`
-key in `package.hocon`).
+key in `sysl.hocon`).
 
 Licensing: u8g2's code is BSD-2-Clause, and each font carries the license of the font it was converted
 from ([u8g2's font groups](https://github.com/olikraus/u8g2/wiki/fntgrp)); u8g2's LICENSE file is
