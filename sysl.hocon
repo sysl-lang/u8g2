@@ -5,20 +5,20 @@
 // This is the block a consumer writes to reach it:
 //
 //     dependencies {
-//       u8g2 { git = "github.com/sysl-lang/u8g2", version = "0.1.2" }
+//       u8g2 { git = "github.com/sysl-lang/u8g2", version = "0.1.3" }
 //     }
 //
 // The module is `sh.sysl.u8g2`.
 
 package {
   name    = "u8g2"
-  version = "0.1.2"
+  version = "0.1.3"
   sysl    = "0.6.0"
 }
 
 // On a board the vendored C takes cstd as its libc; with a libc present (the host) the dependency drops.
 dependencies {
-  cstd { git = "github.com/sysl-lang/cstd", version = "0.1.7", if = "!libc" }
+  cstd { git = "github.com/sysl-lang/cstd", version = "0.1.8", if = "!libc" }
 }
 
 // **What u8g2 is compiled with is this package's decision, not a consumer's.** One option:
