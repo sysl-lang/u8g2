@@ -18,7 +18,7 @@ package {
 
 // On a board the vendored C takes cstd as its libc; with a libc present (the host) the dependency drops.
 dependencies {
-  cstd { git = "github.com/sysl-lang/cstd", version = "0.1.8", if = "!libc" }
+  cstd { git = "github.com/sysl-lang/cstd", version = "0.1.10", if = "!libc" }
 }
 
 // **What u8g2 is compiled with is this package's decision, not a consumer's.** One option:
